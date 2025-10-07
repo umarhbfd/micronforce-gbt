@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Micron Force — Superadmin</title>
+  <style>
+    .panel{max-width:900px;margin:24px auto;padding:16px;border:1px solid #e5e7eb;border-radius:12px;background:#fff}
+    .row{display:flex;gap:8px;align-items:center}
+    .btn{padding:8px 12px;border:1px solid #ddd;border-radius:8px;background:#f8f8f8;cursor:pointer}
+    .chat{border:1px solid #ddd;border-radius:10px;padding:12px;height:320px;overflow:auto;background:#fafafa}
+    .loglist{max-height:220px;overflow:auto;border:1px solid #eee;border-radius:8px;padding:8px;background:#fff}
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h2>ChatGPT (Superadmin Only)</h2>
+    <div class="row" style="margin-bottom:12px">
+      <select id="gpt-model"></select>
+      <select id="gpt-voice"></select>
+      <label><input type="checkbox" id="gpt-tts" checked> Voice reply</label>
+      <button id="gpt-save" class="btn">Save Settings</button>
+      <button id="gpt-refresh-logs" class="btn" style="margin-left:auto">Refresh Logs</button>
+    </div>
+
+    <div id="gpt-chat" class="chat"></div>
+
+    <div class="row" style="margin-top:10px">
+      <button id="gpt-mic" class="btn" title="Hold to speak">🎤</button>
+      <input id="gpt-input" placeholder="Type to ask…" style="flex:1;padding:8px;border:1px solid #ddd;border-radius:8px;">
+      <button id="gpt-send" class="btn">Send</button>
+    </div>
+
+    <div id="gpt-logs" style="margin-top:18px">
+      <h3 style="margin:16px 0 8px;">Recent Logs</h3>
+      <input id="gpt-search" placeholder="Search logs…" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:8px;margin-bottom:8px;">
+      <div id="gpt-loglist" class="loglist"></div>
+    </div>
+  </div>
+
+<script>
+const API = ''; // '' same-origin, or 'https://api.yourdomain.com'
+const ADMIN_BYPASS_TOKEN = ''; // set temporarily for dev if server has ADMIN_BYPASS_TOKEN
+
+const el = (id) => document.getElementById(id);
+const chatBox = el('gpt-chat');
+
+function addMsg(role, text) {
+  const d = document.createElement('div');
+  d.style.margin = '6px 0';
+  d.innerHTML = `<strong>${role}:</strong> ${String(text).replace(/</g,'&lt;')}`;
+  chatBox.appendChild(d);
+  chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+async function api(path, opts={}) {
+  opts.headers = Object.assign(
+    { 'Content-Type': 'application/json' },
+    (opts.headers||{}),
+    ADMIN_BYPASS_TOKEN ? { 'x-admin': ADMIN_BYPASS_TOKEN } : {}
+  );
+  opts.credentials = 'include';
+  const r = await fetch(API + path, opts);
+  if (!r.ok) throw await r.json();
+  return r.json();
+}
+
+async function loadSettings() {
+  const s = await api('/api/super/settings');
+  const models = ['gpt-4o','gpt-4o-mini'];
+  const voices = ['alloy','verse','coral','sage','aria'];
+  el('gpt-model').innerHTML = models.map(m=>`<option ${m===s.model?'selected':''}>${m}</option>`).join('');
+  el('gpt-voice').innerHTML = voices.map(v=>`<option ${v===s.tts_voice?'selected':''}>${v}</option>`).join('');
+  el('gpt-tts').checked = (s.tts_engine || 'openai') !== 'browser';
+}
+
+async function saveSettings() {
+  const body = {
+    model: el('gpt-model').value,
+    tts_engine: el('gpt-tts').checked ? 'openai' : 'browser',
+    tts_voice: el('gpt-voice').value
+  };
+  await api('/api/super/settings', { method:'PUT', body: JSON.stringify(body) });
+}
+
+async function sendMessage(text) {
+  addMsg('You', text);
+  const useVoice = el('gpt-tts').checked;
+  const data = await api('/api/super/chat', { method:'POST', body: JSON.stringify({
+    messages: [{ role:'user', content: text }],
+    admin_user: 'superadmin'
+  })});
+  const reply = data.reply || '';
+  addMsg('GPT', reply);
+
+  if (useVoice) {
+    try {
+      const qs = new URLSearchParams({ text: reply, voice: el('gpt-voice').value });
+      const r = await fetch(`${API}/api/super/tts?${qs.toString()}`, {
+        headers: ADMIN_BYPASS_TOKEN ? { 'x-admin': ADMIN_BYPASS_TOKEN } : {},
+        credentials: 'include'
+      });
+      if (r.ok) {
+        const b = await r.blob();
+        const url = URL.createObjectURL(b);
+        new Audio(url).play();
+        return;
+      }
+    } catch (e) {}
+    if ('speechSynthesis' in window) {
+      const u = new SpeechSynthesisUtterance(reply);
+      speechSynthesis.speak(u);
+    }
+  }
+}
+
+async function refreshLogs(q='') {
+  const r = await api('/api/super/logs' + (q ? ('?q='+encodeURIComponent(q)) : ''));
+  el('gpt-loglist').innerHTML = r.map(row => {
+    const msg = JSON.parse(row.messages || '[]');
+    const u = (msg.find(m=>m.role==='user')||{}).content || '';
+    return `<div style="padding:6px;border-bottom:1px solid #eee">
+      <div><strong>${row.created_at}</strong> <em>(${row.scope} — ${row.actor})</em></div>
+      <div><em>Q:</em> ${u}</div>
+      <div><em>A:</em> ${row.reply}</div>
+    </div>`;
+  }).join('');
+}
+
+el('gpt-send').onclick = () => {
+  const v = el('gpt-input').value.trim();
+  if (!v) return;
+  el('gpt-input').value = '';
+  sendMessage(v);
+};
+el('gpt-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); el('gpt-send').click(); }
+});
+el('gpt-save').onclick = async () => { await saveSettings(); alert('Saved'); };
+el('gpt-refresh-logs').onclick = () => refreshLogs(el('gpt-search').value);
+el('gpt-search').addEventListener('input', (e)=> refreshLogs(e.target.value));
+
+const mic = document.getElementById('gpt-mic');
+let recognition;
+if ('webkitSpeechRecognition' in window) {
+  recognition = new webkitSpeechRecognition();
+  recognition.lang = 'en-GB';
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.onresult = e => {
+    const transcript = e.results[0][0].transcript;
+    document.getElementById('gpt-input').value = transcript;
+  };
+}
+mic.onmousedown = () => recognition && recognition.start();
+mic.onmouseup = () => recognition && recognition.stop();
+
+loadSettings().then(()=>refreshLogs());
+</script>
+</body>
+</html>

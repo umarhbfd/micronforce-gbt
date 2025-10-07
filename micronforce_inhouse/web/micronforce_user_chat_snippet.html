@@ -1,0 +1,73 @@
+<!-- USER CHAT WIDGET (embed in your user page) -->
+<style>
+#mf-user-chat{position:fixed;right:16px;bottom:16px;width:320px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;box-shadow:0 6px 24px rgba(0,0,0,.08);font-family:system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial}
+#mf-user-chat header{padding:10px 12px;border-bottom:1px solid #eee;font-weight:600}
+#mf-user-chat main{height:280px;overflow:auto;padding:10px;background:#fafafa}
+#mf-user-chat footer{display:flex;gap:8px;align-items:center;padding:8px;border-top:1px solid #eee}
+#mf-user-chat .btn{padding:6px 10px;border:1px solid #ddd;border-radius:8px;background:#f7f7f7;cursor:pointer}
+#mf-user-chat .msg{margin:6px 0}
+</style>
+<div id="mf-user-chat" aria-live="polite">
+  <header>Assistant</header>
+  <main id="mf-chat-log"></main>
+  <footer>
+    <button id="mf-mic" class="btn" title="Speak">🎤</button>
+    <input id="mf-input" placeholder="Ask me anything…" style="flex:1;padding:8px;border:1px solid #ddd;border-radius:8px">
+    <button id="mf-send" class="btn">Send</button>
+  </footer>
+</div>
+<script>
+(function(){
+  const API = ''; // '' for same-origin, or 'https://api.yourdomain.com'
+  const log = document.getElementById('mf-chat-log');
+  function add(role, text){
+    const d = document.createElement('div');
+    d.className = 'msg';
+    d.innerHTML = `<strong>${role}:</strong> ${String(text).replace(/</g,'&lt;')}`;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
+  async function sendUserMessage(text){
+    add('You', text);
+    const r = await fetch(API + '/api/chat/user/send', {
+      method: 'POST', headers: { 'Content-Type':'application/json' }, credentials:'include',
+      body: JSON.stringify({ messages: [{ role:'user', content:text }] })
+    });
+    const data = await r.json();
+    const reply = data.reply || (data.error ? ('Error: ' + data.error) : '');
+    add('Assistant', reply);
+
+    // Try server-side TTS first
+    try {
+      const tts = await fetch(API + '/api/tts?text=' + encodeURIComponent(reply), { credentials:'include' });
+      if (tts.ok) { const b = await tts.blob(); new Audio(URL.createObjectURL(b)).play(); }
+      else if ('speechSynthesis' in window) { speechSynthesis.speak(new SpeechSynthesisUtterance(reply)); }
+    } catch (e) {
+      if ('speechSynthesis' in window) { speechSynthesis.speak(new SpeechSynthesisUtterance(reply)); }
+    }
+  }
+  document.getElementById('mf-send').onclick = () => {
+    const v = document.getElementById('mf-input').value.trim();
+    if(!v) return;
+    document.getElementById('mf-input').value='';
+    sendUserMessage(v);
+  };
+  document.getElementById('mf-input').addEventListener('keydown',(e)=>{
+    if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); document.getElementById('mf-send').click(); }
+  });
+  // Speech-to-text (browser) on mic click
+  const micBtn = document.getElementById('mf-mic');
+  let recognition;
+  if ('webkitSpeechRecognition' in window) {
+    recognition = new webkitSpeechRecognition();
+    recognition.lang = 'en-GB';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onresult = e => {
+      const t = e.results[0][0].transcript;
+      document.getElementById('mf-input').value = t;
+    };
+  }
+  micBtn.onclick = () => recognition && recognition.start();
+})();
+</script>
